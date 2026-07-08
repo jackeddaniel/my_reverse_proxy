@@ -1,17 +1,40 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 )
 
 type ReverseProxy struct {
 	backend url.URL
 	proxy   *httputil.ReverseProxy
+}
+
+type LogEntry struct {
+	method    string
+	path      string
+	status    string
+	latency   time.Time
+	backend   string
+	client_ip string
+	trace_id  string
+}
+
+func generateID() string {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return "unknown-id"
+	}
+
+	return hex.EncodeToString(bytes)
 }
 
 func printHeaders(label string, headers http.Header) {
@@ -53,6 +76,12 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 			currXFF = currIP
 		}
 
+		reqId := proxyreq.In.Header.Get("Request-ID")
+		if reqId == "" {
+			reqId = generateID()
+		}
+
+		proxyreq.Out.Header.Set("Request-ID", reqId)
 		proxyreq.Out.Header.Set("X-Forwarded-For", currXFF)
 		proxyreq.Out.Header.Set("X-Forwarded-Host", proxyreq.In.Host)
 		proxyreq.Out.Header.Set("X-Forwarded-Proto", "http")
@@ -60,6 +89,12 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 		printHeaders("After", proxyreq.Out.Header)
 	}
 
+	internalProxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Set("Server", "Siddu's proxy")
+		resp.Header.Set("Trace-id", generateID())
+
+		return nil
+	}
 	reverseproxy := &ReverseProxy{
 		backend: *parsedURL,
 		proxy:   internalProxy,
@@ -69,6 +104,7 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s %s -> %s", r.Method, r.URL.Path, p.backend.Host)
+
 	p.proxy.ServeHTTP(w, r)
 }
 
