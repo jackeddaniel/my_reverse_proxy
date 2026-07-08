@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -36,6 +37,23 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 		printHeaders("Before", proxyreq.In.Header)
 		proxyreq.SetURL(parsedURL)
 
+		currIP, _, err := net.SplitHostPort(proxyreq.In.RemoteAddr)
+
+		fmt.Println("this is what the remoteaddr stores", proxyreq.In.RemoteAddr)
+
+		if err != nil {
+			currIP = proxyreq.In.RemoteAddr
+		}
+
+		currXFF := proxyreq.In.Header.Get("X-Forwarded-Host")
+
+		if currXFF != "" {
+			currXFF = currXFF + ", " + currIP
+		} else {
+			currXFF = currIP
+		}
+
+		proxyreq.Out.Header.Set("X-Forwarded-For", currXFF)
 		proxyreq.Out.Header.Set("X-Forwarded-Host", proxyreq.In.Host)
 		proxyreq.Out.Header.Set("X-Forwarded-Proto", "http")
 
