@@ -18,14 +18,19 @@ type ReverseProxy struct {
 	proxy   *httputil.ReverseProxy
 }
 
-type LogEntry struct {
-	method    string
-	path      string
-	status    string
-	latency   time.Time
-	backend   string
-	client_ip string
-	trace_id  string
+type logEntry struct {
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	Status   int    `json:"status"`
+	Latency  string `json:"latency"`
+	Backend  string `json:"backend"`
+	ClientIP string `json:"client_ip"`
+	TraceID  string `json:"trace_id"`
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
 }
 
 func generateID() string {
@@ -47,6 +52,11 @@ func printHeaders(label string, headers http.Header) {
 	fmt.Println("==========================================")
 }
 
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.status = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
 func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 	parsedURL, err := url.Parse(backendURL)
 	if err != nil {
@@ -57,18 +67,18 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 	internalProxy.Director = nil
 
 	internalProxy.Rewrite = func(proxyreq *httputil.ProxyRequest) {
-		printHeaders("Before", proxyreq.In.Header)
+		//printHeaders("Before", proxyreq.In.Header)
 		proxyreq.SetURL(parsedURL)
 
 		currIP, _, err := net.SplitHostPort(proxyreq.In.RemoteAddr)
 
-		fmt.Println("this is what the remoteaddr stores", proxyreq.In.RemoteAddr)
+		//fmt.Println("this is what the remoteaddr stores", proxyreq.In.RemoteAddr)
 
 		if err != nil {
 			currIP = proxyreq.In.RemoteAddr
 		}
 
-		currXFF := proxyreq.In.Header.Get("X-Forwarded-Host")
+		currXFF := proxyreq.In.Header.Get("X-Forwarded-For")
 
 		if currXFF != "" {
 			currXFF = currXFF + ", " + currIP
@@ -79,6 +89,8 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 		reqId := proxyreq.In.Header.Get("Request-ID")
 		if reqId == "" {
 			reqId = generateID()
+
+			proxyreq.In.Header.Set("Request-ID", reqId)
 		}
 
 		proxyreq.Out.Header.Set("Request-ID", reqId)
@@ -86,12 +98,19 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 		proxyreq.Out.Header.Set("X-Forwarded-Host", proxyreq.In.Host)
 		proxyreq.Out.Header.Set("X-Forwarded-Proto", "http")
 
-		printHeaders("After", proxyreq.Out.Header)
+		//printHeaders("After", proxyreq.Out.Header)
 	}
 
 	internalProxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Set("Server", "Siddu's proxy")
-		resp.Header.Set("Trace-id", generateID())
+
+		if resp.Request != nil {
+			reqID := resp.Request.Header.Get("Request-ID")
+
+			if reqID != "" {
+				resp.Header.Set("Trace-ID", reqID)
+			}
+		}
 
 		return nil
 	}
@@ -103,9 +122,36 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 }
 
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s %s -> %s", r.Method, r.URL.Path, p.backend.Host)
+	startTime := time.Now()
 
-	p.proxy.ServeHTTP(w, r)
+	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+	p.proxy.ServeHTTP(recorder, r)
+
+	duration := time.Since(startTime)
+	latencyStr := fmt.Sprintf("%.2fms", float64(duration.Nanoseconds())/1e6)
+
+	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		clientIP = r.RemoteAddr
+	}
+
+	entry := logEntry{
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Status:   recorder.status,
+		Latency:  latencyStr,
+		Backend:  p.backend.Host,
+		ClientIP: clientIP,
+		TraceID:  r.Header.Get("Request-ID"),
+	}
+
+	jsonData, err := json.Marshal(entry)
+	if err == nil {
+		fmt.Println(string(jsonData))
+	} else {
+		log.Printf("Failed to marshal log entry: %v", err)
+	}
 }
 
 func main() {
