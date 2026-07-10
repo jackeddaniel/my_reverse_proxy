@@ -155,7 +155,15 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	backend := "http://localhost:3490/"
+	config, err := LoadConfig("../../config.yaml")
+	if err != nil {
+		fmt.Println("Config read failed")
+		return
+	}
+
+	backend := config.Backends[0]
+	fmt.Println("This is the backend: ", backend)
+	fmt.Println("This is the config: ", config)
 
 	proxy, err := NewReverseProxy(backend)
 	if err != nil {
@@ -163,7 +171,7 @@ func main() {
 	}
 
 	log.Printf("proxying :8080 %s", backend)
-	if err := http.ListenAndServe(":8080", proxy); err != nil {
+	if err := http.ListenAndServe(config.Port, proxy); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
