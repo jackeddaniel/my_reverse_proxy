@@ -57,14 +57,14 @@ func (r *statusRecorder) WriteHeader(statusCode int) {
 	r.ResponseWriter.WriteHeader(statusCode)
 }
 
-func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
-	parsedURL, err := url.Parse(backendURL)
+func NewReverseProxy(backends []string) (*ReverseProxy, error) {
+	parsedURL, err := url.Parse(backends[0])
 	if err != nil {
 		return nil, err
 	}
 
-	internalProxy := httputil.NewSingleHostReverseProxy(parsedURL)
-	internalProxy.Director = nil
+	//internalProxy := httputil.NewSingleHostReverseProxy(parsedURL)
+	var internalProxy httputil.ReverseProxy
 
 	internalProxy.Rewrite = func(proxyreq *httputil.ProxyRequest) {
 		//printHeaders("Before", proxyreq.In.Header)
@@ -116,7 +116,7 @@ func NewReverseProxy(backendURL string) (*ReverseProxy, error) {
 	}
 	reverseproxy := &ReverseProxy{
 		backend: *parsedURL,
-		proxy:   internalProxy,
+		proxy:   &internalProxy,
 	}
 	return reverseproxy, nil
 }
@@ -161,11 +161,10 @@ func main() {
 		return
 	}
 
-	backend := config.Backends[0]
-	fmt.Println("This is the backend: ", backend)
+	fmt.Println("This is the backend: ", config.Backends[0])
 	fmt.Println("This is the config: ", *config)
 
-	proxy, err := NewReverseProxy(backend)
+	proxy, err := NewReverseProxy(config.Backends)
 	if err != nil {
 		log.Fatalf("failed to create reverse proxy: %v", err)
 	}
@@ -180,7 +179,7 @@ func main() {
 		Handler: proxy, ReadTimeout: readTimeout,
 	}
 
-	log.Printf("proxying :8080 %s", backend)
+	log.Printf("proxying :8080 %s", config.Backends)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
