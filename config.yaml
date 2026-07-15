@@ -1,8 +1,0 @@
-# Server port configuration
-port: ":8080"
-
-backends:
-  - "http://localhost:3490"
-
-timeouts:
-  read: "5s"
