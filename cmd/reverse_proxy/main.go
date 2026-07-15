@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,10 @@ type ReverseProxy struct {
 	proxy    *httputil.ReverseProxy
 	index    int
 }
+
+type ctxKey int
+
+const backendCtxKey ctxKey = 0
 
 type logEntry struct {
 	Method   string `json:"method"`
@@ -84,8 +89,8 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 	var internalProxy httputil.ReverseProxy
 
 	internalProxy.Rewrite = func(proxyreq *httputil.ProxyRequest) {
-		//printHeaders("Before", proxyreq.In.Header)
-		proxyreq.SetURL(reverseproxy.nextBackend())
+		backend := proxyreq.In.Context().Value(backendCtxKey).(*url.URL)
+		proxyreq.SetURL(backend)
 
 		currIP, _, err := net.SplitHostPort(proxyreq.In.RemoteAddr)
 
@@ -115,9 +120,6 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 		proxyreq.Out.Header.Set("X-Forwarded-Host", proxyreq.In.Host)
 		proxyreq.Out.Header.Set("X-Forwarded-Proto", "http")
 
-		// now we set next index
-		reverseproxy.index = (reverseproxy.index + 1) % len(reverseproxy.backends)
-
 	}
 
 	internalProxy.ModifyResponse = func(resp *http.Response) error {
@@ -142,6 +144,9 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
+	backend := p.nextBackend()
+	r = r.WithContext(context.WithValue(r.Context(), backendCtxKey, backend))
+
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
 	p.proxy.ServeHTTP(recorder, r)
@@ -159,7 +164,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Path:     r.URL.Path,
 		Status:   recorder.status,
 		Latency:  latencyStr,
-		Backend:  p.backends[p.index].String(),
+		Backend:  backend.String(),
 		ClientIP: clientIP,
 		TraceID:  r.Header.Get("Request-ID"),
 	}
