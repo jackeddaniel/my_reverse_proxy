@@ -14,8 +14,9 @@ import (
 )
 
 type ReverseProxy struct {
-	backend url.URL
-	proxy   *httputil.ReverseProxy
+	backends []url.URL
+	proxy    *httputil.ReverseProxy
+	index    int
 }
 
 type logEntry struct {
@@ -52,23 +53,39 @@ func printHeaders(label string, headers http.Header) {
 	fmt.Println("==========================================")
 }
 
+func (p *ReverseProxy) nextBackend() *url.URL {
+	backend := &p.backends[p.index]
+	p.index = (p.index + 1) % len(p.backends)
+	return backend
+}
+
 func (r *statusRecorder) WriteHeader(statusCode int) {
 	r.status = statusCode
 	r.ResponseWriter.WriteHeader(statusCode)
 }
 
 func NewReverseProxy(backends []string) (*ReverseProxy, error) {
-	parsedURL, err := url.Parse(backends[0])
-	if err != nil {
-		return nil, err
+	reverseproxy := &ReverseProxy{
+		backends: make([]url.URL, 0, len(backends)),
 	}
+
+	for i, backend := range backends {
+		parsedURL, err := url.Parse(backend)
+		if err != nil {
+			fmt.Println("Failed to append the following backend: ", i, backend)
+		}
+
+		reverseproxy.backends = append(reverseproxy.backends, *parsedURL)
+	}
+
+	reverseproxy.index = 0
 
 	//internalProxy := httputil.NewSingleHostReverseProxy(parsedURL)
 	var internalProxy httputil.ReverseProxy
 
 	internalProxy.Rewrite = func(proxyreq *httputil.ProxyRequest) {
 		//printHeaders("Before", proxyreq.In.Header)
-		proxyreq.SetURL(parsedURL)
+		proxyreq.SetURL(reverseproxy.nextBackend())
 
 		currIP, _, err := net.SplitHostPort(proxyreq.In.RemoteAddr)
 
@@ -98,7 +115,9 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 		proxyreq.Out.Header.Set("X-Forwarded-Host", proxyreq.In.Host)
 		proxyreq.Out.Header.Set("X-Forwarded-Proto", "http")
 
-		//printHeaders("After", proxyreq.Out.Header)
+		// now we set next index
+		reverseproxy.index = (reverseproxy.index + 1) % len(reverseproxy.backends)
+
 	}
 
 	internalProxy.ModifyResponse = func(resp *http.Response) error {
@@ -114,10 +133,9 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 
 		return nil
 	}
-	reverseproxy := &ReverseProxy{
-		backend: *parsedURL,
-		proxy:   &internalProxy,
-	}
+
+	reverseproxy.proxy = &internalProxy
+
 	return reverseproxy, nil
 }
 
@@ -141,7 +159,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Path:     r.URL.Path,
 		Status:   recorder.status,
 		Latency:  latencyStr,
-		Backend:  p.backend.Host,
+		Backend:  p.backends[p.index].String(),
 		ClientIP: clientIP,
 		TraceID:  r.Header.Get("Request-ID"),
 	}
