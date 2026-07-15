@@ -163,15 +163,25 @@ func main() {
 
 	backend := config.Backends[0]
 	fmt.Println("This is the backend: ", backend)
-	fmt.Println("This is the config: ", config)
+	fmt.Println("This is the config: ", *config)
 
 	proxy, err := NewReverseProxy(backend)
 	if err != nil {
 		log.Fatalf("failed to create reverse proxy: %v", err)
 	}
 
+	readTimeout, err := time.ParseDuration(config.Timeouts.Read)
+	if err != nil {
+		log.Fatalf("invalid read timeout %q: %v", config.Timeouts.Read, err)
+	}
+
+	server := &http.Server{
+		Addr:    config.Port,
+		Handler: proxy, ReadTimeout: readTimeout,
+	}
+
 	log.Printf("proxying :8080 %s", backend)
-	if err := http.ListenAndServe(config.Port, proxy); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
