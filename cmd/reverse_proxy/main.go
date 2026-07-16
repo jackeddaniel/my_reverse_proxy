@@ -11,13 +11,19 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync"
 	"time"
 )
+
+type safe_index struct {
+	mu    sync.Mutex
+	index int
+}
 
 type ReverseProxy struct {
 	backends []url.URL
 	proxy    *httputil.ReverseProxy
-	index    int
+	index    safe_index
 }
 
 type ctxKey int
@@ -59,8 +65,10 @@ func printHeaders(label string, headers http.Header) {
 }
 
 func (p *ReverseProxy) nextBackend() *url.URL {
-	backend := &p.backends[p.index]
-	p.index = (p.index + 1) % len(p.backends)
+	p.index.mu.Lock()
+	defer p.index.mu.Unlock()
+	backend := &p.backends[p.index.index]
+	p.index.index = (p.index.index + 1) % len(p.backends)
 	return backend
 }
 
@@ -83,10 +91,16 @@ func NewReverseProxy(backends []string) (*ReverseProxy, error) {
 		reverseproxy.backends = append(reverseproxy.backends, *parsedURL)
 	}
 
-	reverseproxy.index = 0
+	reverseproxy.index.index = 0
 
 	//internalProxy := httputil.NewSingleHostReverseProxy(parsedURL)
 	var internalProxy httputil.ReverseProxy
+
+	internalProxy.Transport = &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     90 * time.Second,
+	}
 
 	internalProxy.Rewrite = func(proxyreq *httputil.ProxyRequest) {
 		backend := proxyreq.In.Context().Value(backendCtxKey).(*url.URL)
